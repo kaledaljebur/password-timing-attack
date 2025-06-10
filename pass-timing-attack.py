@@ -112,6 +112,8 @@ def runGUI():
         helpText.pack(fill="both", expand=True, padx=10, pady=10)
 
     def onStart():
+        global stopFlag
+        stopFlag = False
         url = entryURL.get()
         user = entryUser.get()
         passStart = entryPassStart.get()
