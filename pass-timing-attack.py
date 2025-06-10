@@ -65,7 +65,8 @@ def runGUI():
         while request.status_code == 401:
             # print (stopFlag)
             # for i in range(32, 127):  # printable ASCII characters only
-            for i in range(97, 122):  # small leters for quick test
+            # for i in range(97, 122):  # small leters for quick test
+            for i in range(127):
                 if stopFlag:
                     outputText.insert(tk.END, "Attack stopped by user.\n")
                     resultLabel.config(text="Stopped!")
